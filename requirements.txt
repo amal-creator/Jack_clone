@@ -1,0 +1,14 @@
+
+torch 
+transformers 
+textblob 
+tweepy 
+requests 
+beautifulsoup4 
+python-dotenv
+pandas
+transformers[torch]
+requests-oauthlib
+scikit-learn
+emoji
+pypdf

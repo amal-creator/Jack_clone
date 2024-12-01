@@ -147,13 +147,17 @@ dmypy.json
 
 # Pyre type checker
 .pyre/
-
+jack_blog_content.csv
+jack_cleaned_content.csv
+jack_cleaned_with_sentiment.csv
+jack_combined_content.csv
 # pytype static type analyzer
 .pytype/
 
 # Cython debug symbols
 cython_debug/
-
+Jack_model_gpt2/
+results/
 # PyCharm
 #  JetBrains specific template is maintained in a separate JetBrains.gitignore that can
 #  be found at https://github.com/github/gitignore/blob/main/Global/JetBrains.gitignore

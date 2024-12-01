@@ -76,11 +76,11 @@ print("Combined content saved to jack_combined_content.csv")
 def clean_text(text):
     text = text.strip()  
     text = ' '.join(text.split())  
-    text = ''.join(e for e in text if e.isalnum() or e.isspace() or e in ['.', ',', '?', '!'] or  emoji.is_emoji(e))  # Keep basic punctuation
+    text = ''.join(e for e in text if e.isalnum() or e.isspace() or e in ['.', ',', '?', '!'] or  emoji.is_emoji(e))  
     return text
 
-df_combined['text'] = df_combined['text'].astype(str).apply(clean_text)  # Clean the text column
-df_cleaned = df_combined.drop_duplicates(subset=['text']).dropna(subset=['text'])  # Remove duplicates and NaN values
+df_combined['text'] = df_combined['text'].astype(str).apply(clean_text)  
+df_cleaned = df_combined.drop_duplicates(subset=['text']).dropna(subset=['text'])  
 
 # Save cleaned content
 
@@ -94,7 +94,7 @@ def get_sentiment(text):
     analysis = TextBlob(text)
     return analysis.sentiment.polarity
 
-df_cleaned['sentiment'] = df_cleaned['text'].apply(get_sentiment)  # Add sentiment column
+df_cleaned['sentiment'] = df_cleaned['text'].apply(get_sentiment)  
 df_cleaned.to_csv('jack_cleaned_with_sentiment.csv', index=False)
 print("Sentiment analysis added and saved.")
 
@@ -156,58 +156,94 @@ training_args = TrainingArguments(
 
 
 # Tokenize the training texts
+TRAIN_MODEL = True
 
-train_encodings = tokenizer(train_texts, truncation=True, padding=True, max_length=512)
-train_dataset = BlogDataset(train_encodings)
+if TRAIN_MODEL:
+    train_encodings = tokenizer(train_texts, truncation=True, padding=True, max_length=512)
+    train_dataset = BlogDataset(train_encodings)
 
-trainer = Trainer(
-    model=model,
-    args=training_args,
-    train_dataset=train_dataset,  
-    eval_dataset=eval_dataset,   
-)
+    trainer = Trainer(
+        model=model,
+        args=training_args,
+        train_dataset=train_dataset,  
+        eval_dataset=eval_dataset,   
+    )
 
 
 
-trainer.train()
-model.save_pretrained('./Jack_model_gpt2')
-print("Model fine-tuned and saved.")
+    trainer.train()
+    model.save_pretrained('./Jack_model_gpt2')
+    print("Model fine-tuned and saved.")
+
+else:
+    if not os.path.exists('./Jack_model_gpt2'):
+        raise FileNotFoundError("Model not found")
 
 # Step 4: Generate and Post Tweets
 
-model = GPT2LMHeadModel.from_pretrained('./jack_gpt2')
+model = GPT2LMHeadModel.from_pretrained('./Jack_model_gpt2')
 tokenizer = GPT2Tokenizer.from_pretrained('gpt2')
 tokenizer.pad_token = tokenizer.eos_token
 
 
 
-def generate_tweet(prompt, num_tweets=10):
+def preprocess_blog_content(file_path):
+    df = pd.read_csv(file_path,encoding='latin-1')
+    sentences = []
+    for text in df['text']:
+        for sentence in text.split('.'):
+            sentence = sentence.strip()
+            if 10 < len(sentence) <= 120:
+                sentences.append(sentence)
+    return sentences
+
+
+
+
+
+
+blog_sentences = preprocess_blog_content('jack_blog_content.csv')
+def generate_tweet(prompt, num_tweets=1):
+    #print(f"Generating tweet for prompt:{prompt}")
     generated_tweets = []
     for _ in range(num_tweets):
         input_ids = tokenizer.encode(prompt, return_tensors='pt')
-        attention_mask = torch.ones(input_ids.shape, device=input_ids.device)  # Create attention mask
+        attention_mask = torch.ones(input_ids.shape, device=input_ids.device) 
+        seed = random.randint(0, 10000)
+        torch.manual_seed(seed)
+        # Ensure input is within model's context window
+        #max_positions =  getattr(model.config,"n_positions",None)
+        #if max_positions is None:
+         #   raise ValueError("Model config desnt have n_positn")
+        #i#f len(input_ids[0]) > model.config.n_positions:
+         #   input_ids = input_ids[:, :model.config.n_positions]
+
+        #print(f"input ids (tokenized): {input_ids}")
         
-        #seed = random.randint(0, 10000)
-        #torch.manual_seed(seed)
+        
         output = model.generate(
             input_ids,
             attention_mask=attention_mask,  
-            max_length=60,
             do_sample=True,
-            num_return_sequences=1,
+            max_length=120,
+            num_return_sequences=num_tweets,
             pad_token_id=tokenizer.eos_token_id,
-            temperature=1.0,
+            temperature=1.,
             top_k=50,
             top_p=0.95,
             no_repeat_ngram_size=2,
         )
-        for sequence in output:
-            tweet = tokenizer.decode(output[0], skip_special_tokens=True).split('.')[0].strip() + '.'
-            if 10 < len(tweet) <= 280:
-                generated_tweets.append(tweet)
+
+        #print(f"Generated outpt:{output}")
+        
+        tweet = tokenizer.decode(output[0],skip_special_tokens=True).strip() 
+        if 10 < len(tweet) <= 280:
+            generated_tweets.append(tweet)
+
+    #print(f"generated tweet: {generated_tweets}")
     return generated_tweets
 
-#blog_sentences = preprocess_blog_content('jack_blog_content.csv')
+
 
 def post_tweets(blog_sentences,max_posts = 10):
     posted_tweets = set()
@@ -219,41 +255,38 @@ def post_tweets(blog_sentences,max_posts = 10):
         if posted_count >= max_posts:
             break
         try:
-            generated_tweets = generate_tweet(prompt, num_tweets=10)
+            generated_tweets = generate_tweet(prompt, num_tweets=1)
+            #print(f"Generated tweet: {generated_tweets}")
+            
             for tweet in generated_tweets:
                 if posted_count >= max_posts:
                     break
                 if tweet in posted_tweets:
                     continue
+                
                 response = client.create_tweet(text=tweet)
-                #tweet_id = response.data["id"]
+                
                 print(f"Posted tweet: {tweet}")
                 posted_tweets.add(tweet)
                 posted_count += 1
-                #respond_to_replies(tweet_id)
+                
                 time.sleep(2)
-        except tweepy.errors.TooManyRequests:
+        except tweepy.errors.TooManyRequests as e:
             retry_attempts += 1
-            print(f"Rate limit exceeded. Waiting for 15 minutes (Attempt {retry_attempts})...")
-            time.sleep(15 * 60)
+            print(f"Rate limit exceeded. Waiting for {e.response.headers['x-rate-limit-reset']} seconds (Attempt {retry_attempts})...")
+            reset_time = int(e.response.headers['x-rate-limit-reset']) 
+            wait_time = reset_time - time.time()  
+            if wait_time > 0:
+                time.sleep(wait_time + 5) 
         except Exception as e:
             print(f"An unexpected error occurred: {e}")
 
     print(f"Total tweets posted: {posted_count}")
 
 
-# Function to monitor replies and respond in Jack's style
-#def respond_to_replies(tweet_id):
- #   replies = client.search_recent_tweets(query=f"to:jack_twitter_handle {tweet_id}")
-  #  
-   # for reply in replies.data:
-    #    input_prompt = "Respond as Jack in a friendly, engaging way: " + reply.text
-     #   response = generate_tweet(input_prompt, num_tweets=1)
-      #  
-        # Post response to the reply
-       # client.create_tweet(text=response[0], in_reply_to_tweet_id=reply.id)
-       # print(f"Responded to tweet {reply.id}: {response[0]}")
 
-# Example usage: Generate tweets from blog content and respond to replies
-blog_sentences = ["I’m proud to share that I am working as a core member of an innovative AI content generation project at Persist Ventures, under the inspiring leadership of Jackson Jesionowski. This journey has been an incredible opportunity to explore cutting-edge technologies and creative solutions. 🚀",]  # Example blog sentences
+
+blog__sentences = ["I’m proud to share that I am working as a core member of an innovative AI content generation project at Persist Ventures, under the inspiring leadership of Jackson Jesionowski. This journey has been an incredible opportunity to explore cutting-edge technologies and creative solutions. 🚀",]  
+
+
 post_tweets(blog_sentences,max_posts=10)
